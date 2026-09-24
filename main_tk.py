@@ -614,6 +614,9 @@ class MainAppTk(tk.Tk):
         btn_new_cat = ttk.Button(top_bar, text="📁 تعریف دسته/زیردسته", command=self.new_category)
         btn_new_cat.pack(side="left", padx=5)
 
+        btn_edit_cat = ttk.Button(top_bar, text="✏️ ویرایش دسته‌بندی‌ها", command=self.edit_category_dlg)
+        btn_edit_cat.pack(side="left", padx=5)
+
         self.tree_parts = ttk.Treeview(self.tab_inventory, columns=("id", "serial", "name", "cat", "qty", "buy", "sell", "loc"), show="headings")
         for col, h in [("id", "شناسه"), ("serial", "سریال"), ("name", "نام قطعه"), ("cat", "دسته"), ("qty", "موجودی"), ("buy", "قیمت خرید"), ("sell", "قیمت فروش"), ("loc", "موقعیت")]:
             self.tree_parts.heading(col, text=h)
@@ -653,6 +656,55 @@ class MainAppTk(tk.Tk):
                 self.refresh_inventory()
 
         ttk.Button(dlg, text="💾 ذخیره", command=save).pack(pady=15)
+
+    def edit_category_dlg(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("ویرایش دسته‌بندی‌های انبار")
+        dlg.geometry("450x380")
+        dlg.grab_set()
+
+        cats = self.db.get_categories()
+        ttk.Label(dlg, text="انتخاب دسته جهت ویرایش:").pack(pady=2)
+        cmb_cat = ttk.Combobox(dlg, justify="right")
+        cmb_cat['values'] = [f"{c['id']}: {c['name']} " + (f"(زیردسته {c['parent_name']})" if c.get('parent_name') else "") for c in cats]
+        if cats:
+            cmb_cat.current(0)
+        cmb_cat.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="نام جدید دسته:").pack(pady=2)
+        ent_name = ttk.Entry(dlg, justify="right")
+        ent_name.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="دسته والد جدید (اختیاری):").pack(pady=2)
+        cmb_parent = ttk.Combobox(dlg, justify="right")
+        cmb_parent['values'] = ["0: اصلی (بدون والد)"] + [f"{c['id']}: {c['name']}" for c in cats]
+        cmb_parent.current(0)
+        cmb_parent.pack(fill="x", padx=15)
+
+        def load_selected_cat(e=None):
+            if cmb_cat.get():
+                cid = int(cmb_cat.get().split(":")[0])
+                c = next((item for item in cats if item["id"] == cid), None)
+                if c:
+                    ent_name.delete(0, tk.END)
+                    ent_name.insert(0, c["name"])
+
+        cmb_cat.bind("<<ComboboxSelected>>", load_selected_cat)
+        load_selected_cat()
+
+        def save():
+            if not cmb_cat.get() or not ent_name.get().strip():
+                messagebox.showwarning("خطا", "انتخاب دسته و وارد کردن نام جدید الزامی است.", parent=dlg)
+                return
+            cat_id = int(cmb_cat.get().split(":")[0])
+            p_val = cmb_parent.get().split(":")[0]
+            p_id = int(p_val) if int(p_val) > 0 and int(p_val) != cat_id else None
+            self.db.update_category(cat_id, ent_name.get().strip(), parent_id=p_id)
+            messagebox.showinfo("موفق", "دسته‌بندی ویرایش شد.", parent=dlg)
+            dlg.destroy()
+            self.refresh_inventory()
+
+        ttk.Button(dlg, text="💾 ذخیره ویرایش", command=save).pack(pady=15)
 
     def new_part(self):
         dlg = tk.Toplevel(self)
@@ -774,6 +826,9 @@ class MainAppTk(tk.Tk):
         btn_edit_acc = ttk.Button(top_bar, text="✏️ ویرایش حساب", command=self.edit_account)
         btn_edit_acc.pack(side="left", padx=5)
 
+        btn_trans_acc = ttk.Button(top_bar, text="💸 انتقال وجه بین حساب‌ها", command=self.transfer_funds_dlg)
+        btn_trans_acc.pack(side="left", padx=5)
+
         self.tree_accounts = ttk.Treeview(self.tab_accounts, columns=("id", "title", "type", "bank", "num", "bal"), show="headings")
         for col, h in [("id", "شناسه"), ("title", "عنوان حساب"), ("type", "نوع"), ("bank", "بانک"), ("num", "شماره کارت/حساب"), ("bal", "موجودی (تومان)")]:
             self.tree_accounts.heading(col, text=h)
@@ -873,6 +928,55 @@ class MainAppTk(tk.Tk):
             self.refresh_accounts()
 
         ttk.Button(dlg, text="💾 ذخیره تغییرات", command=save).pack(pady=15)
+
+    def transfer_funds_dlg(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("انتقال وجه بین حساب‌ها و صندوق‌ها")
+        dlg.geometry("400x320")
+        dlg.grab_set()
+
+        accounts = self.db.get_accounts()
+        if len(accounts) < 2:
+            messagebox.showwarning("هشدار", "حداقل به ۲ حساب برای انتقال وجه نیاز است.", parent=dlg)
+            dlg.destroy()
+            return
+
+        ttk.Label(dlg, text="از حساب (مبداء):").pack(pady=2)
+        cmb_from = ttk.Combobox(dlg, justify="right")
+        cmb_from['values'] = [f"{a['id']}: {a['title']} (موجودی: {money(a['current_balance'])})" for a in accounts]
+        cmb_from.current(0)
+        cmb_from.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="به حساب (مقصد):").pack(pady=2)
+        cmb_to = ttk.Combobox(dlg, justify="right")
+        cmb_to['values'] = [f"{a['id']}: {a['title']} (موجودی: {money(a['current_balance'])})" for a in accounts]
+        cmb_to.current(1 if len(accounts) > 1 else 0)
+        cmb_to.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="مبلغ انتقال (تومان):").pack(pady=2)
+        ent_amt = ttk.Entry(dlg, justify="right")
+        ent_amt.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="توضیحات/بابت:").pack(pady=2)
+        ent_notes = ttk.Entry(dlg, justify="right")
+        ent_notes.pack(fill="x", padx=15)
+
+        def save():
+            from_id = int(cmb_from.get().split(":")[0])
+            to_id = int(cmb_to.get().split(":")[0])
+            amt = float(ent_amt.get() or 0)
+            if from_id == to_id:
+                messagebox.showwarning("خطا", "حساب مبداء و مقصد نمی‌تواند یکسان باشد.", parent=dlg)
+                return
+            ok = self.db.transfer_funds(from_id, to_id, amt, notes=ent_notes.get().strip())
+            if ok:
+                messagebox.showinfo("موفق", "انتقال وجه با موفقیت انجام گردید.", parent=dlg)
+                dlg.destroy()
+                self.refresh_accounts()
+            else:
+                messagebox.showerror("خطا", "موجودی حساب مبداء کافی نیست یا اطلاعات معتبر نمی باشد.", parent=dlg)
+
+        ttk.Button(dlg, text="💸 انجام انتقال", command=save).pack(pady=15)
 
     # --- 5. همکاران ---
     def setup_colleagues_tab(self):

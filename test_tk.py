@@ -92,6 +92,25 @@ class TestTkinterApp(unittest.TestCase):
         if os.path.exists(backup_file):
             os.remove(backup_file)
 
+    def test_category_edit_and_fund_transfer(self):
+        cat_id = self.db.add_category("دسته تست")
+        self.db.update_category(cat_id, "دسته تغییر یافته")
+        cats = self.db.get_categories()
+        c = next((item for item in cats if item["id"] == cat_id), None)
+        self.assertEqual(c["name"], "دسته تغییر یافته")
+
+        acc1 = self.db.add_account({"title": "حساب 1", "account_type": "صندوق نقد", "current_balance": 100000})
+        acc2 = self.db.add_account({"title": "حساب 2", "account_type": "کارت/حساب بانکی", "current_balance": 0})
+
+        ok = self.db.transfer_funds(acc1, acc2, 40000, "انتقال برای خرید")
+        self.assertTrue(ok)
+
+        accs = self.db.get_accounts()
+        a1 = next((a for a in accs if a["id"] == acc1), None)
+        a2 = next((a for a in accs if a["id"] == acc2), None)
+        self.assertEqual(a1["current_balance"], 60000)
+        self.assertEqual(a2["current_balance"], 40000)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -675,6 +675,31 @@ class Database:
             WHERE id=?
             """, (data["title"], data["account_type"], data.get("bank_name", ""), data.get("account_number", ""), data.get("current_balance", 0), account_id))
 
+    def transfer_funds(self, from_account_id: int, to_account_id: int, amount: float, notes: str = "") -> bool:
+        if from_account_id == to_account_id or amount <= 0:
+            return False
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            from_acc = cur.execute("SELECT current_balance FROM accounts WHERE id = ?", (from_account_id,)).fetchone()
+            if not from_acc or from_acc["current_balance"] < amount:
+                return False
+
+            cur.execute("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?", (amount, from_account_id))
+            cur.execute("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?", (amount, to_account_id))
+
+            cur.execute("""
+            INSERT INTO expenses (category, title, account_id, amount, notes)
+            VALUES ('انتقال وجه', ?, ?, ?, ?)
+            """, (f"انتقال به حساب {to_account_id}", from_account_id, amount, notes))
+
+            cur.execute("""
+            INSERT INTO payments (account_id, amount, payment_method, notes)
+            VALUES (?, ?, 'انتقال داخلی', ?)
+            """, (to_account_id, amount, f"دریافت از حساب {from_account_id} - {notes}"))
+
+            conn.commit()
+            return True
+
     def add_payment(self, data: dict) -> int:
         payment_date = data.get("payment_date") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.get_connection() as conn:
