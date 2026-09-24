@@ -196,7 +196,6 @@ class MainAppTk(tk.Tk):
         style.configure("Treeview", font=(font_family, 9), rowheight=28, background="white", fieldbackground="white", foreground="#333333")
         style.configure("Treeview.Heading", font=(font_family, 10, "bold"), background="#34495e", foreground="white")
         style.map("Treeview.Heading", background=[("active", "#2c3e50")])
-        self.refresh_all()
 
     def setup_ui(self):
         # نوار بالای صفحه
