@@ -163,7 +163,39 @@ class MainAppTk(tk.Tk):
         shop_title = self.db.get_setting("shop_name", "تعمیرگاه تخصصی الکترونیک")
         self.title(f"مدیریت تعمیرگاه - {shop_title} | کاربر: {self.current_user['full_name']} ({self.current_user['role']})")
 
+        self.apply_theme()
         self.setup_ui()
+
+    def apply_theme(self):
+        style = ttk.Style(self)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+
+        # تعریف رنگ‌ها و فونت شکیل
+        bg_color = "#f4f6f9"
+        primary_color = "#2c3e50"
+        accent_color = "#2980b9"
+        font_family = "Tahoma"
+
+        self.configure(bg=bg_color)
+        style.configure(".", font=(font_family, 10), background=bg_color)
+
+        style.configure("TFrame", background=bg_color)
+        style.configure("TLabel", background=bg_color, foreground="#2c3e50")
+
+        # استایل دکمه‌ها
+        style.configure("TButton", font=(font_family, 10, "bold"), padding=6, background="#3498db", foreground="white", borderwidth=0)
+        style.map("TButton", background=[("active", "#2980b9")])
+
+        # استایل تب‌ها
+        style.configure("TNotebook", background=bg_color, tabmargins=[2, 5, 2, 0])
+        style.configure("TNotebook.Tab", font=(font_family, 10, "bold"), padding=[12, 6], background="#e2e8f0", foreground="#333333")
+        style.map("TNotebook.Tab", background=[("selected", "#2c3e50")], foreground=[("selected", "white")])
+
+        # استایل جدول‌ها (Treeview)
+        style.configure("Treeview", font=(font_family, 9), rowheight=28, background="white", fieldbackground="white", foreground="#333333")
+        style.configure("Treeview.Heading", font=(font_family, 10, "bold"), background="#34495e", foreground="white")
+        style.map("Treeview.Heading", background=[("active", "#2c3e50")])
         self.refresh_all()
 
     def setup_ui(self):
