@@ -22,11 +22,15 @@ class LoginDialogTk(tk.Toplevel):
         self.title("🔐 ورود به سامانه مدیریت تعمیرگاه")
         self.geometry("380x280")
         self.resizable(False, False)
-        self.transient(parent)
 
-        # On Linux X11, grab_set fails if the dialog or parent is not viewable
+        # Do NOT call transient(parent) while parent is withdrawn!
+        # Doing so makes the Toplevel hidden or invisible on Windows / Thonny / X11.
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.setup_ui()
+
+        self.lift()
+        self.focus_force()
+
         self.after(100, self.safe_grab)
 
     def safe_grab(self):
