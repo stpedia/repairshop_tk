@@ -69,10 +69,17 @@ class Database:
                 phone TEXT,
                 national_code TEXT,
                 address TEXT,
+                status TEXT NOT NULL DEFAULT 'عادی',
                 notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """)
+
+            # ارتقای ستون status در صورت عدم وجود در دیتابیس قدیمی
+            try:
+                cursor.execute("ALTER TABLE customers ADD COLUMN status TEXT NOT NULL DEFAULT 'عادی'")
+            except sqlite3.OperationalError:
+                pass
 
             # 4. تکنسین‌ها
             cursor.execute("""
@@ -103,10 +110,17 @@ class Database:
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                description TEXT
+                parent_id INTEGER,
+                name TEXT NOT NULL,
+                description TEXT,
+                FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE CASCADE
             )
             """)
+
+            try:
+                cursor.execute("ALTER TABLE categories ADD COLUMN parent_id INTEGER")
+            except sqlite3.OperationalError:
+                pass
 
             # 7. قطعات انبار
             cursor.execute("""
@@ -214,14 +228,14 @@ class Database:
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS cheques (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL DEFAULT 'دریافتی', -- دریافتی یا پرداختی
+                type TEXT NOT NULL DEFAULT 'دریافتی',
                 cheque_number TEXT NOT NULL,
                 person_name TEXT NOT NULL,
                 bank_name TEXT,
                 amount REAL NOT NULL,
                 issue_date TEXT,
                 due_date TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'در جریان', -- در جریان، پاس شده، برگشتی
+                status TEXT NOT NULL DEFAULT 'در جریان',
                 notes TEXT
             )
             """)
@@ -244,7 +258,6 @@ class Database:
             for key, val in default_settings:
                 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, val))
 
-            # ایجاد حساب مالی و دسته‌بندی انبار پیش‌فرض
             cursor.execute("SELECT COUNT(*) FROM accounts")
             if cursor.fetchone()[0] == 0:
                 cursor.execute(
@@ -300,7 +313,6 @@ class Database:
 
     # --- تولید شماره قبض روزانه ---
     def generate_receipt_number(self, date_prefix: str = None) -> str:
-        """تولید شماره قبض به فرمت REC-YYYYMMDD-001 که روزانه ریست می‌شود"""
         if not date_prefix:
             date_prefix = jalali_today().replace("/", "")
 
@@ -327,34 +339,63 @@ class Database:
         with self.get_connection() as conn:
             cur = conn.cursor()
             cur.execute("""
-            INSERT INTO customers (full_name, mobile, phone, national_code, address, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (data["full_name"], data["mobile"], data.get("phone", ""), data.get("national_code", ""), data.get("address", ""), data.get("notes", "")))
+            INSERT INTO customers (full_name, mobile, phone, national_code, address, status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (data["full_name"], data["mobile"], data.get("phone", ""), data.get("national_code", ""), data.get("address", ""), data.get("status", "عادی"), data.get("notes", "")))
             return cur.lastrowid
 
     def update_customer(self, customer_id: int, data: dict):
         with self.get_connection() as conn:
             conn.execute("""
-            UPDATE customers SET full_name=?, mobile=?, phone=?, national_code=?, address=?, notes=?
+            UPDATE customers SET full_name=?, mobile=?, phone=?, national_code=?, address=?, status=?, notes=?
             WHERE id=?
-            """, (data["full_name"], data["mobile"], data.get("phone", ""), data.get("national_code", ""), data.get("address", ""), data.get("notes", ""), customer_id))
+            """, (data["full_name"], data["mobile"], data.get("phone", ""), data.get("national_code", ""), data.get("address", ""), data.get("status", "عادی"), data.get("notes", ""), customer_id))
 
-    def get_customers(self, search: str = "") -> List[Dict[str, Any]]:
+    def get_customers(self, search: str = "", filter_status: str = "") -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
+            sql = "SELECT * FROM customers WHERE 1=1"
+            params = []
             if search:
                 s = f"%{search}%"
-                rows = conn.execute(
-                    "SELECT * FROM customers WHERE full_name LIKE ? OR mobile LIKE ? OR national_code LIKE ? ORDER BY id DESC",
-                    (s, s, s)
-                ).fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM customers ORDER BY id DESC").fetchall()
-            return [dict(r) for r in rows]
+                sql += " AND (full_name LIKE ? OR mobile LIKE ? OR national_code LIKE ?)"
+                params.extend([s, s, s])
+            if filter_status:
+                sql += " AND status = ?"
+                params.append(filter_status)
+            sql += " ORDER BY id DESC"
+            rows = conn.execute(sql, params).fetchall()
+
+            result = []
+            for r in rows:
+                d = dict(r)
+                # محاسبه مانده بدهی/طلبکاری مشتری
+                rep_sums = conn.execute("SELECT COALESCE(SUM(final_cost), 0), COALESCE(SUM(paid), 0) FROM repairs WHERE customer_id = ?", (d["id"],)).fetchone()
+                total_cost = rep_sums[0]
+                total_paid = rep_sums[1]
+                d["total_cost"] = total_cost
+                d["total_paid"] = total_paid
+                d["balance"] = total_cost - total_paid # مثبت یعنی بدهکار، منفی یعنی طلبکار
+                result.append(d)
+            return result
 
     def get_customer(self, customer_id: int) -> Optional[Dict[str, Any]]:
         with self.get_connection() as conn:
             row = conn.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            d = dict(row)
+            rep_sums = conn.execute("SELECT COALESCE(SUM(final_cost), 0), COALESCE(SUM(paid), 0) FROM repairs WHERE customer_id = ?", (d["id"],)).fetchone()
+            d["total_cost"] = rep_sums[0]
+            d["total_paid"] = rep_sums[1]
+            d["balance"] = rep_sums[0] - rep_sums[1]
+            return d
+
+    def get_customer_payments_and_receipts(self, customer_id: int) -> Dict[str, Any]:
+        """دریافت لیست پرونده‌ها و پرداخت‌های یک مشتری"""
+        with self.get_connection() as conn:
+            repairs = [dict(r) for r in conn.execute("SELECT * FROM repairs WHERE customer_id = ? ORDER BY id DESC", (customer_id,)).fetchall()]
+            payments = [dict(r) for r in conn.execute("SELECT * FROM payments WHERE customer_id = ? ORDER BY id DESC", (customer_id,)).fetchall()]
+            return {"repairs": repairs, "payments": payments}
 
     # --- تکنسین‌ها ---
     def add_technician(self, data: dict) -> int:
@@ -365,6 +406,13 @@ class Database:
             VALUES (?, ?, ?, ?, ?)
             """, (data["full_name"], data.get("mobile", ""), data.get("specialty", ""), data.get("commission_rate", 0), data.get("notes", "")))
             return cur.lastrowid
+
+    def update_technician(self, tech_id: int, data: dict):
+        with self.get_connection() as conn:
+            conn.execute("""
+            UPDATE technicians SET full_name=?, mobile=?, specialty=?, commission_rate=?, notes=?
+            WHERE id=?
+            """, (data["full_name"], data.get("mobile", ""), data.get("specialty", ""), data.get("commission_rate", 0), data.get("notes", ""), tech_id))
 
     def get_technicians(self) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
@@ -380,20 +428,37 @@ class Database:
             """, (data["full_name"], data.get("mobile", ""), data.get("shop_name", ""), data.get("address", ""), data.get("current_balance", 0), data.get("notes", "")))
             return cur.lastrowid
 
+    def update_colleague(self, colleague_id: int, data: dict):
+        with self.get_connection() as conn:
+            conn.execute("""
+            UPDATE colleagues SET full_name=?, mobile=?, shop_name=?, address=?, current_balance=?, notes=?
+            WHERE id=?
+            """, (data["full_name"], data.get("mobile", ""), data.get("shop_name", ""), data.get("address", ""), data.get("current_balance", 0), data.get("notes", ""), colleague_id))
+
     def get_colleagues(self) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM colleagues ORDER BY id DESC").fetchall()]
 
-    # --- انبار و قطعات ---
+    # --- انبار و دسته‌بندی با زیردسته ---
     def get_categories(self) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
-            return [dict(r) for r in conn.execute("SELECT * FROM categories ORDER BY id ASC").fetchall()]
+            rows = conn.execute("""
+            SELECT c.*, p.name as parent_name
+            FROM categories c
+            LEFT JOIN categories p ON c.parent_id = p.id
+            ORDER BY c.id ASC
+            """).fetchall()
+            return [dict(r) for r in rows]
 
-    def add_category(self, name: str, description: str = "") -> int:
+    def add_category(self, name: str, parent_id: Optional[int] = None, description: str = "") -> int:
         with self.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute("INSERT INTO categories (name, description) VALUES (?, ?)", (name, description))
+            cur.execute("INSERT INTO categories (name, parent_id, description) VALUES (?, ?, ?)", (name, parent_id, description))
             return cur.lastrowid
+
+    def update_category(self, cat_id: int, name: str, parent_id: Optional[int] = None, description: str = ""):
+        with self.get_connection() as conn:
+            conn.execute("UPDATE categories SET name=?, parent_id=?, description=? WHERE id=?", (name, parent_id, description, cat_id))
 
     def add_part(self, data: dict) -> int:
         with self.get_connection() as conn:
@@ -403,6 +468,13 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (data.get("category_id"), data.get("serial", ""), data["name"], data.get("quantity", 0), data.get("min_quantity", 2), data.get("buy_price", 0), data.get("unit_price", 0), data.get("location", ""), data.get("notes", "")))
             return cur.lastrowid
+
+    def update_part(self, part_id: int, data: dict):
+        with self.get_connection() as conn:
+            conn.execute("""
+            UPDATE parts SET category_id=?, serial=?, name=?, quantity=?, min_quantity=?, buy_price=?, unit_price=?, location=?, notes=?
+            WHERE id=?
+            """, (data.get("category_id"), data.get("serial", ""), data["name"], data.get("quantity", 0), data.get("min_quantity", 2), data.get("buy_price", 0), data.get("unit_price", 0), data.get("location", ""), data.get("notes", ""), part_id))
 
     def get_parts(self, search: str = "") -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
@@ -434,7 +506,7 @@ class Database:
             rows = conn.execute("SELECT * FROM parts WHERE quantity <= min_quantity ORDER BY quantity ASC").fetchall()
             return [dict(r) for r in rows]
 
-    # --- پرونده‌های تعمیر ---
+    # --- پرونده‌های تعمیر و فاکتورها همراه تاریخ دلخواه ---
     def add_repair(self, data: dict) -> int:
         receipt_no = data.get("receipt_no") or self.generate_receipt_number()
         service_cost = float(data.get("service_cost", 0))
@@ -442,6 +514,7 @@ class Database:
         discount = float(data.get("discount", 0))
         tax = float(data.get("tax", 0))
         final_cost = max(0.0, (service_cost + parts_cost + tax) - discount)
+        created_at = data.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with self.get_connection() as conn:
             cur = conn.cursor()
@@ -449,15 +522,15 @@ class Database:
             INSERT INTO repairs (
                 receipt_no, customer_id, technician_id, device_type, brand_model,
                 serial_number, accessories, reported_defect, technician_report,
-                status, service_cost, parts_cost, discount, tax, final_cost, paid
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, service_cost, parts_cost, discount, tax, final_cost, paid, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 receipt_no, data["customer_id"], data.get("technician_id"),
                 data["device_type"], data.get("brand_model", ""),
                 data.get("serial_number", ""), data.get("accessories", ""),
                 data.get("reported_defect", ""), data.get("technician_report", ""),
                 data.get("status", "پذیرش شده"), service_cost, parts_cost,
-                discount, tax, final_cost, data.get("paid", 0)
+                discount, tax, final_cost, data.get("paid", 0), created_at
             ))
             return cur.lastrowid
 
@@ -469,21 +542,38 @@ class Database:
         final_cost = max(0.0, (service_cost + parts_cost + tax) - discount)
 
         with self.get_connection() as conn:
-            conn.execute("""
-            UPDATE repairs SET
-                customer_id=?, technician_id=?, device_type=?, brand_model=?,
-                serial_number=?, accessories=?, reported_defect=?, technician_report=?,
-                status=?, service_cost=?, parts_cost=?, discount=?, tax=?, final_cost=?,
-                updated_at=CURRENT_TIMESTAMP
-            WHERE id=?
-            """, (
-                data["customer_id"], data.get("technician_id"),
-                data["device_type"], data.get("brand_model", ""),
-                data.get("serial_number", ""), data.get("accessories", ""),
-                data.get("reported_defect", ""), data.get("technician_report", ""),
-                data.get("status", "پذیرش شده"), service_cost, parts_cost,
-                discount, tax, final_cost, repair_id
-            ))
+            if "created_at" in data and data["created_at"]:
+                conn.execute("""
+                UPDATE repairs SET
+                    customer_id=?, technician_id=?, device_type=?, brand_model=?,
+                    serial_number=?, accessories=?, reported_defect=?, technician_report=?,
+                    status=?, service_cost=?, parts_cost=?, discount=?, tax=?, final_cost=?,
+                    created_at=?, updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """, (
+                    data["customer_id"], data.get("technician_id"),
+                    data["device_type"], data.get("brand_model", ""),
+                    data.get("serial_number", ""), data.get("accessories", ""),
+                    data.get("reported_defect", ""), data.get("technician_report", ""),
+                    data.get("status", "پذیرش شده"), service_cost, parts_cost,
+                    discount, tax, final_cost, data["created_at"], repair_id
+                ))
+            else:
+                conn.execute("""
+                UPDATE repairs SET
+                    customer_id=?, technician_id=?, device_type=?, brand_model=?,
+                    serial_number=?, accessories=?, reported_defect=?, technician_report=?,
+                    status=?, service_cost=?, parts_cost=?, discount=?, tax=?, final_cost=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """, (
+                    data["customer_id"], data.get("technician_id"),
+                    data["device_type"], data.get("brand_model", ""),
+                    data.get("serial_number", ""), data.get("accessories", ""),
+                    data.get("reported_defect", ""), data.get("technician_report", ""),
+                    data.get("status", "پذیرش شده"), service_cost, parts_cost,
+                    discount, tax, final_cost, repair_id
+                ))
 
     def get_repairs(self, search: str = "", status: str = "") -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
@@ -523,7 +613,6 @@ class Database:
     def add_part_to_repair(self, repair_id: int, part_id: int, qty: int = 1) -> bool:
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            # بررسی موجودی
             part = cursor.execute("SELECT * FROM parts WHERE id = ?", (part_id,)).fetchone()
             if not part or part["quantity"] < qty:
                 return False
@@ -531,23 +620,19 @@ class Database:
             unit_price = part["unit_price"]
             total_price = unit_price * qty
 
-            # افزودن به قطعات مصرفی
             cursor.execute("""
             INSERT INTO repair_parts (repair_id, part_id, quantity, unit_price, total_price)
             VALUES (?, ?, ?, ?, ?)
             """, (repair_id, part_id, qty, unit_price, total_price))
 
-            # کسر از انبار
             cursor.execute("UPDATE parts SET quantity = quantity - ? WHERE id = ?", (qty, part_id))
 
-            # به روزرسانی هزینه قطعات در پرونده
             cursor.execute("""
             UPDATE repairs SET parts_cost = (
                 SELECT COALESCE(SUM(total_price), 0) FROM repair_parts WHERE repair_id = ?
             ) WHERE id = ?
             """, (repair_id, repair_id))
 
-            # محاسبه مجدد هزینه کل
             rep = cursor.execute("SELECT * FROM repairs WHERE id = ?", (repair_id,)).fetchone()
             service_cost = rep["service_cost"]
             parts_cost = rep["parts_cost"]
@@ -569,7 +654,7 @@ class Database:
             """, (repair_id,)).fetchall()
             return [dict(r) for r in rows]
 
-    # --- حساب‌های مالی و تراکنش‌ها ---
+    # --- حساب‌های مالی و تراکنش‌ها همراه تاریخ دلخواه ---
     def get_accounts(self) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM accounts ORDER BY id ASC").fetchall()]
@@ -583,23 +668,29 @@ class Database:
             """, (data["title"], data["account_type"], data.get("bank_name", ""), data.get("account_number", ""), data.get("current_balance", 0)))
             return cur.lastrowid
 
+    def update_account(self, account_id: int, data: dict):
+        with self.get_connection() as conn:
+            conn.execute("""
+            UPDATE accounts SET title=?, account_type=?, bank_name=?, account_number=?, current_balance=?
+            WHERE id=?
+            """, (data["title"], data["account_type"], data.get("bank_name", ""), data.get("account_number", ""), data.get("current_balance", 0), account_id))
+
     def add_payment(self, data: dict) -> int:
+        payment_date = data.get("payment_date") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.get_connection() as conn:
             cur = conn.cursor()
             amount = float(data["amount"])
             account_id = data.get("account_id")
 
             cur.execute("""
-            INSERT INTO payments (repair_id, customer_id, account_id, amount, payment_method, reference_no, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (data.get("repair_id"), data.get("customer_id"), account_id, amount, data["payment_method"], data.get("reference_no", ""), data.get("notes", "")))
+            INSERT INTO payments (repair_id, customer_id, account_id, amount, payment_method, reference_no, payment_date, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (data.get("repair_id"), data.get("customer_id"), account_id, amount, data["payment_method"], data.get("reference_no", ""), payment_date, data.get("notes", "")))
             pay_id = cur.lastrowid
 
-            # افزایش موجودی حساب مالی
             if account_id:
                 cur.execute("UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?", (amount, account_id))
 
-            # اگر بابت پرونده تعمیر بوده، پرداخت‌شده آپدیت شود
             if data.get("repair_id"):
                 cur.execute("""
                 UPDATE repairs SET paid = paid + ? WHERE id = ?
@@ -608,31 +699,38 @@ class Database:
             conn.commit()
             return pay_id
 
-    # --- هزینه‌ها ---
+    # --- هزینه‌ها همراه تاریخ دلخواه و ویرایش ---
     def add_expense(self, data: dict) -> int:
+        expense_date = data.get("expense_date") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.get_connection() as conn:
             cur = conn.cursor()
             amount = float(data["amount"])
             account_id = data.get("account_id")
 
             cur.execute("""
-            INSERT INTO expenses (category, title, account_id, amount, notes)
-            VALUES (?, ?, ?, ?, ?)
-            """, (data["category"], data["title"], account_id, amount, data.get("notes", "")))
+            INSERT INTO expenses (category, title, account_id, amount, expense_date, notes)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (data["category"], data["title"], account_id, amount, expense_date, data.get("notes", "")))
             exp_id = cur.lastrowid
 
-            # کسر از حساب مالی مربوطه
             if account_id:
                 cur.execute("UPDATE accounts SET current_balance = current_balance - ? WHERE id = ?", (amount, account_id))
 
             conn.commit()
             return exp_id
 
+    def update_expense(self, expense_id: int, data: dict):
+        with self.get_connection() as conn:
+            conn.execute("""
+            UPDATE expenses SET category=?, title=?, amount=?, expense_date=?, notes=?
+            WHERE id=?
+            """, (data["category"], data["title"], float(data["amount"]), data.get("expense_date"), data.get("notes", ""), expense_id))
+
     def get_expenses(self) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM expenses ORDER BY id DESC").fetchall()]
 
-    # --- چک‌ها ---
+    # --- چک‌ها همراه ویرایش ---
     def add_cheque(self, data: dict) -> int:
         with self.get_connection() as conn:
             cur = conn.cursor()
@@ -641,6 +739,13 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (data.get("type", "دریافتی"), data["cheque_number"], data["person_name"], data.get("bank_name", ""), float(data["amount"]), data.get("issue_date", ""), data["due_date"], data.get("status", "در جریان"), data.get("notes", "")))
             return cur.lastrowid
+
+    def update_cheque(self, cheque_id: int, data: dict):
+        with self.get_connection() as conn:
+            conn.execute("""
+            UPDATE cheques SET type=?, cheque_number=?, person_name=?, bank_name=?, amount=?, issue_date=?, due_date=?, status=?, notes=?
+            WHERE id=?
+            """, (data.get("type", "دریافتی"), data["cheque_number"], data["person_name"], data.get("bank_name", ""), float(data["amount"]), data.get("issue_date", ""), data["due_date"], data.get("status", "در جریان"), data.get("notes", ""), cheque_id))
 
     def get_overdue_cheques(self) -> List[Dict[str, Any]]:
         today = jalali_today()
@@ -664,10 +769,17 @@ class Database:
             today_income = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE DATE(payment_date) = ?", (today_str,)).fetchone()[0]
             return active_repairs, ready_repairs, total_customers, today_income
 
-    # --- پشتیبان‌گیری دیتابیس ---
+    # --- پشتیبان‌گیری و بازیابی دیتابیس ---
     def backup_database(self, dest_path: str = None) -> str:
         if not dest_path:
             filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
             dest_path = str(BACKUP_DIR / filename)
         shutil.copy2(self.db_path, dest_path)
         return dest_path
+
+    def restore_database(self, source_path: str) -> bool:
+        if not os.path.exists(source_path):
+            return False
+        shutil.copy2(source_path, self.db_path)
+        self.init_db()
+        return True

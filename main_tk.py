@@ -8,7 +8,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from tk_config import STATUSES, EXPENSE_CATEGORIES, PAYMENT_METHODS, ACCOUNT_TYPES, DATA_DIR, BACKUP_DIR, RECEIPTS_DIR
+from tk_config import STATUSES, CUSTOMER_STATUSES, EXPENSE_CATEGORIES, PAYMENT_METHODS, ACCOUNT_TYPES, DATA_DIR, BACKUP_DIR, RECEIPTS_DIR
 from tk_database import Database, hash_password, verify_password
 from tk_utils import jalali_today, iso_to_jalali, money, open_folder, generate_receipt_html
 
@@ -23,14 +23,11 @@ class LoginDialogTk(tk.Toplevel):
         self.geometry("380x280")
         self.resizable(False, False)
 
-        # Do NOT call transient(parent) while parent is withdrawn!
-        # Doing so makes the Toplevel hidden or invisible on Windows / Thonny / X11.
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.setup_ui()
 
         self.lift()
         self.focus_force()
-
         self.after(100, self.safe_grab)
 
     def safe_grab(self):
@@ -141,7 +138,7 @@ class MainAppTk(tk.Tk):
         self.current_user = None
 
         self.title("سامانه مدیریت تعمیرگاه الکترونیک (نسخه Tkinter / ttk)")
-        self.geometry("1150x720")
+        self.geometry("1180x740")
 
         # اجرای دیالوگ لاگین
         self.withdraw()
@@ -155,7 +152,6 @@ class MainAppTk(tk.Tk):
         self.current_user = login_dlg.authenticated_user
         self.deiconify()
 
-        # بررسی تغییر اجباری رمز عبور
         if self.current_user.get("must_change_password") == 1:
             cp_dlg = ChangePasswordDialogTk(self, self.db, self.current_user["id"], force=True)
             self.wait_window(cp_dlg)
@@ -165,16 +161,14 @@ class MainAppTk(tk.Tk):
 
         self.apply_theme()
         self.setup_ui()
+        self.refresh_all()
 
     def apply_theme(self):
         style = ttk.Style(self)
         if "clam" in style.theme_names():
             style.theme_use("clam")
 
-        # تعریف رنگ‌ها و فونت شکیل
         bg_color = "#f4f6f9"
-        primary_color = "#2c3e50"
-        accent_color = "#2980b9"
         font_family = "Tahoma"
 
         self.configure(bg=bg_color)
@@ -183,22 +177,18 @@ class MainAppTk(tk.Tk):
         style.configure("TFrame", background=bg_color)
         style.configure("TLabel", background=bg_color, foreground="#2c3e50")
 
-        # استایل دکمه‌ها
         style.configure("TButton", font=(font_family, 10, "bold"), padding=6, background="#3498db", foreground="white", borderwidth=0)
         style.map("TButton", background=[("active", "#2980b9")])
 
-        # استایل تب‌ها
         style.configure("TNotebook", background=bg_color, tabmargins=[2, 5, 2, 0])
         style.configure("TNotebook.Tab", font=(font_family, 10, "bold"), padding=[12, 6], background="#e2e8f0", foreground="#333333")
         style.map("TNotebook.Tab", background=[("selected", "#2c3e50")], foreground=[("selected", "white")])
 
-        # استایل جدول‌ها (Treeview)
         style.configure("Treeview", font=(font_family, 9), rowheight=28, background="white", fieldbackground="white", foreground="#333333")
         style.configure("Treeview.Heading", font=(font_family, 10, "bold"), background="#34495e", foreground="white")
         style.map("Treeview.Heading", background=[("active", "#2c3e50")])
 
     def setup_ui(self):
-        # نوار بالای صفحه
         top_bar = ttk.Frame(self)
         top_bar.pack(fill="x", padx=10, pady=5)
 
@@ -211,10 +201,12 @@ class MainAppTk(tk.Tk):
         btn_backup = ttk.Button(top_bar, text="💾 پشتیبان‌گیری", command=self.backup)
         btn_backup.pack(side="left", padx=5)
 
+        btn_restore = ttk.Button(top_bar, text="📥 بازیابی پشتیبان", command=self.restore)
+        btn_restore.pack(side="left", padx=5)
+
         btn_folder = ttk.Button(top_bar, text="📁 پوشه داده‌ها", command=lambda: open_folder(DATA_DIR))
         btn_folder.pack(side="left", padx=5)
 
-        # تب‌های ناوبری اصلی
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -236,7 +228,6 @@ class MainAppTk(tk.Tk):
         self.notebook.add(self.tab_custs, text="👥 مشتریان")
         self.notebook.add(self.tab_accounting, text="💰 حسابداری و هزینه‌ها")
 
-        # ایجاد محتوای تب‌ها
         self.setup_dash_tab()
         self.setup_repairs_tab()
         self.setup_inventory_tab()
@@ -255,6 +246,16 @@ class MainAppTk(tk.Tk):
             self.db.backup_database(path)
             messagebox.showinfo("موفق", "نسخه پشتیبان با موفقیت تهیه شد.")
 
+    def restore(self):
+        path = filedialog.askopenfilename(filetypes=[("SQLite Files", "*.db")])
+        if path:
+            if messagebox.askyesno("تایید بازیابی", "آیا مطمئن هستید؟ تمامی داده‌های فعلی با فایل پشتیبان جایگزین خواهند شد."):
+                if self.db.restore_database(path):
+                    messagebox.showinfo("موفق", "دیتابیس با موفقیت بازیابی شد.")
+                    self.refresh_all()
+                else:
+                    messagebox.showerror("خطا", "فایل پشتیبان معتبر نیست.")
+
     # --- 1. داشبورد ---
     def setup_dash_tab(self):
         cards_frame = ttk.Frame(self.tab_dash)
@@ -272,14 +273,12 @@ class MainAppTk(tk.Tk):
         self.lbl_income = ttk.Label(cards_frame, text="درآمد امروز: ۰", font=("Tahoma", 11, "bold"), relief="groove", padding=10)
         self.lbl_income.pack(side="right", fill="x", expand=True, padx=5)
 
-        # جدول چک‌ها
         ttk.Label(self.tab_dash, text="🔔 هشدار چک‌ها و تعهدات سررسیدشده:", font=("Tahoma", 10, "bold"), foreground="red").pack(anchor="e", padx=10, pady=5)
         self.tree_dash_cheques = ttk.Treeview(self.tab_dash, columns=("type", "num", "person", "amount", "due"), show="headings", height=4)
         for col, h in [("type", "نوع"), ("num", "شماره چک"), ("person", "طرف حساب"), ("amount", "مبلغ (تومان)"), ("due", "سررسید")]:
             self.tree_dash_cheques.heading(col, text=h)
         self.tree_dash_cheques.pack(fill="x", padx=10, pady=5)
 
-        # جدول کسری انبار
         ttk.Label(self.tab_dash, text="⚠️ قطعات دارای کسری موجودی در انبار:", font=("Tahoma", 10, "bold")).pack(anchor="e", padx=10, pady=5)
         self.tree_low_stock = ttk.Treeview(self.tab_dash, columns=("serial", "name", "qty", "min_qty"), show="headings", height=4)
         for col, h in [("serial", "کد/سریال"), ("name", "نام قطعه"), ("qty", "موجودی"), ("min_qty", "حداقل مجاز")]:
@@ -303,7 +302,7 @@ class MainAppTk(tk.Tk):
         for p in self.db.get_low_stock_parts():
             self.tree_low_stock.insert("", "end", values=(p.get("serial"), p.get("name"), p.get("quantity"), p.get("min_quantity")))
 
-    # --- 2. تعمیرات ---
+    # --- 2. تعمیرات و فاکتورها همراه تاریخ دلخواه ---
     def setup_repairs_tab(self):
         top_bar = ttk.Frame(self.tab_repairs)
         top_bar.pack(fill="x", padx=10, pady=5)
@@ -316,7 +315,7 @@ class MainAppTk(tk.Tk):
         btn_new_rep = ttk.Button(top_bar, text="➕ پذیرش جدید", command=self.new_repair)
         btn_new_rep.pack(side="left", padx=5)
 
-        btn_edit_rep = ttk.Button(top_bar, text="✏️ ویرایش/تغییر وضعیت", command=self.edit_repair)
+        btn_edit_rep = ttk.Button(top_bar, text="✏️ ویرایش فاکتور/پرونده", command=self.edit_repair)
         btn_edit_rep.pack(side="left", padx=5)
 
         btn_part_rep = ttk.Button(top_bar, text="⚙️ ثبت قطعه مصرفی", command=self.add_repair_part_dlg)
@@ -325,7 +324,7 @@ class MainAppTk(tk.Tk):
         btn_pay_rep = ttk.Button(top_bar, text="💳 ثبت دریافتی", command=self.add_repair_payment_dlg)
         btn_pay_rep.pack(side="left", padx=5)
 
-        btn_print = ttk.Button(top_bar, text="🖨️ چاپ قبض", command=self.print_receipt)
+        btn_print = ttk.Button(top_bar, text="🖨️ چاپ فاکتور/قبض", command=self.print_receipt)
         btn_print.pack(side="left", padx=5)
 
         self.tree_repairs = ttk.Treeview(self.tab_repairs, columns=("id", "receipt", "cust", "device", "tech", "status", "cost", "paid", "date"), show="headings")
@@ -349,8 +348,8 @@ class MainAppTk(tk.Tk):
 
     def new_repair(self):
         dlg = tk.Toplevel(self)
-        dlg.title("پذیرش دستگاه جدید")
-        dlg.geometry("450x480")
+        dlg.title("پذیرش و صدور فاکتور جدید")
+        dlg.geometry("450x520")
         dlg.grab_set()
 
         ttk.Label(dlg, text="انتخاب مشتری:").pack(pady=2)
@@ -360,6 +359,11 @@ class MainAppTk(tk.Tk):
         if custs:
             cmb_cust.current(0)
         cmb_cust.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="تاریخ فاکتور (مثلا 1403/07/03 یا ISO):").pack(pady=2)
+        ent_date = ttk.Entry(dlg, justify="right")
+        ent_date.insert(0, jalali_today())
+        ent_date.pack(fill="x", padx=15)
 
         ttk.Label(dlg, text="نوع دستگاه (مثلا آیفون/لپ‌تاپ):").pack(pady=2)
         ent_dev = ttk.Entry(dlg, justify="right")
@@ -390,7 +394,8 @@ class MainAppTk(tk.Tk):
                 "device_type": ent_dev.get().strip(),
                 "brand_model": ent_model.get().strip(),
                 "reported_defect": ent_defect.get().strip(),
-                "service_cost": float(ent_cost.get() or 0)
+                "service_cost": float(ent_cost.get() or 0),
+                "created_at": ent_date.get().strip()
             })
             messagebox.showinfo("موفق", f"پرونده پذیرش با شماره قبض {rec_no} ثبت شد.", parent=dlg)
             dlg.destroy()
@@ -407,8 +412,8 @@ class MainAppTk(tk.Tk):
             return
 
         dlg = tk.Toplevel(self)
-        dlg.title(f"ویرایش پرونده {rep['receipt_no']}")
-        dlg.geometry("450x500")
+        dlg.title(f"ویرایش مشخصات فاکتور {rep['receipt_no']}")
+        dlg.geometry("450x550")
         dlg.grab_set()
 
         ttk.Label(dlg, text="وضعیت پرونده:").pack(pady=2)
@@ -428,6 +433,11 @@ class MainAppTk(tk.Tk):
         else:
             cmb_tech.current(0)
         cmb_tech.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="تاریخ فاکتور:").pack(pady=2)
+        ent_date = ttk.Entry(dlg, justify="right")
+        ent_date.insert(0, rep.get("created_at") or jalali_today())
+        ent_date.pack(fill="x", padx=15)
 
         ttk.Label(dlg, text="گزارش فنی / اقدامات انجام شده:").pack(pady=2)
         ent_report = ttk.Entry(dlg, justify="right")
@@ -461,10 +471,11 @@ class MainAppTk(tk.Tk):
                 "service_cost": float(ent_cost.get() or 0),
                 "parts_cost": rep["parts_cost"],
                 "discount": float(ent_disc.get() or 0),
-                "tax": rep.get("tax", 0)
+                "tax": rep.get("tax", 0),
+                "created_at": ent_date.get().strip()
             }
             self.db.update_repair(rep_id, data)
-            messagebox.showinfo("موفق", "تغییرات پرونده ذخیره شد.", parent=dlg)
+            messagebox.showinfo("موفق", "مشخصات فاکتور ذخیره شد.", parent=dlg)
             dlg.destroy()
             self.refresh_all()
 
@@ -502,11 +513,11 @@ class MainAppTk(tk.Tk):
             qty = int(ent_qty.get() or 1)
             ok = self.db.add_part_to_repair(rep_id, p_id, qty)
             if ok:
-                messagebox.showinfo("موفق", "قطعه با موفقیت در پرونده اضافه و از انبار کسر شد.", parent=dlg)
+                messagebox.showinfo("موفق", "قطعه در پرونده اضافه و از انبار کسر شد.", parent=dlg)
                 dlg.destroy()
                 self.refresh_all()
             else:
-                messagebox.showerror("خطا", "موجودی انبار برای این قطعه کافی نیست.", parent=dlg)
+                messagebox.showerror("خطا", "موجودی انبار کافی نیست.", parent=dlg)
 
         ttk.Button(dlg, text="💾 افزودن قطعه", command=save).pack(pady=15)
 
@@ -518,7 +529,7 @@ class MainAppTk(tk.Tk):
 
         dlg = tk.Toplevel(self)
         dlg.title(f"ثبت دریافتی بابت قبض {rep['receipt_no']}")
-        dlg.geometry("400x320")
+        dlg.geometry("400x360")
         dlg.grab_set()
 
         accounts = self.db.get_accounts()
@@ -528,6 +539,11 @@ class MainAppTk(tk.Tk):
         if accounts:
             cmb_acc.current(0)
         cmb_acc.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="تاریخ واریز/پرداخت:").pack(pady=2)
+        ent_date = ttk.Entry(dlg, justify="right")
+        ent_date.insert(0, jalali_today())
+        ent_date.pack(fill="x", padx=15)
 
         ttk.Label(dlg, text="روش پرداخت:").pack(pady=2)
         cmb_method = ttk.Combobox(dlg, values=PAYMENT_METHODS, justify="right")
@@ -548,7 +564,7 @@ class MainAppTk(tk.Tk):
             acc_id = int(cmb_acc.get().split(":")[0]) if cmb_acc.get() else None
             amt = float(ent_amt.get() or 0)
             if amt <= 0:
-                messagebox.showwarning("خطا", "مبلغ دریافتی باید معتبر باشد.", parent=dlg)
+                messagebox.showwarning("خطا", "مبلغ دریافتی معتبر نیست.", parent=dlg)
                 return
             self.db.add_payment({
                 "repair_id": rep_id,
@@ -556,7 +572,8 @@ class MainAppTk(tk.Tk):
                 "account_id": acc_id,
                 "amount": amt,
                 "payment_method": cmb_method.get(),
-                "reference_no": ent_ref.get().strip()
+                "reference_no": ent_ref.get().strip(),
+                "payment_date": ent_date.get().strip()
             })
             messagebox.showinfo("موفق", "پرداخت با موفقیت ثبت شد.", parent=dlg)
             dlg.destroy()
@@ -578,7 +595,7 @@ class MainAppTk(tk.Tk):
         file_path = generate_receipt_html(rep, shop_info)
         webbrowser.open(f"file://{os.path.abspath(file_path)}")
 
-    # --- 3. انبار و فروش ---
+    # --- 3. انبار و دسته/زیردسته ---
     def setup_inventory_tab(self):
         top_bar = ttk.Frame(self.tab_inventory)
         top_bar.pack(fill="x", padx=10, pady=5)
@@ -591,7 +608,10 @@ class MainAppTk(tk.Tk):
         btn_new_part = ttk.Button(top_bar, text="➕ قطعه جدید", command=self.new_part)
         btn_new_part.pack(side="left", padx=5)
 
-        btn_new_cat = ttk.Button(top_bar, text="📁 دسته‌بندی جدید", command=self.new_category)
+        btn_edit_part = ttk.Button(top_bar, text="✏️ ویرایش قطعه", command=self.edit_part)
+        btn_edit_part.pack(side="left", padx=5)
+
+        btn_new_cat = ttk.Button(top_bar, text="📁 تعریف دسته/زیردسته", command=self.new_category)
         btn_new_cat.pack(side="left", padx=5)
 
         self.tree_parts = ttk.Treeview(self.tab_inventory, columns=("id", "serial", "name", "cat", "qty", "buy", "sell", "loc"), show="headings")
@@ -608,17 +628,26 @@ class MainAppTk(tk.Tk):
 
     def new_category(self):
         dlg = tk.Toplevel(self)
-        dlg.title("ایجاد دسته‌بندی انبار")
-        dlg.geometry("350x200")
+        dlg.title("تعریف دسته و زیردسته قطعات")
+        dlg.geometry("380x250")
         dlg.grab_set()
 
-        ttk.Label(dlg, text="نام دسته:").pack(pady=5)
+        cats = self.db.get_categories()
+        ttk.Label(dlg, text="دسته اصلی (در صورت زیردسته بودن):").pack(pady=2)
+        cmb_parent = ttk.Combobox(dlg, justify="right")
+        cmb_parent['values'] = ["0: اصلی (بدون والد)"] + [f"{c['id']}: {c['name']}" for c in cats]
+        cmb_parent.current(0)
+        cmb_parent.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="نام دسته/زیردسته جدید (مثلا خازن یا الکترولیت):").pack(pady=2)
         ent = ttk.Entry(dlg, justify="right")
         ent.pack(fill="x", padx=15)
 
         def save():
             if ent.get().strip():
-                self.db.add_category(ent.get().strip())
+                p_val = cmb_parent.get().split(":")[0]
+                p_id = int(p_val) if int(p_val) > 0 else None
+                self.db.add_category(ent.get().strip(), parent_id=p_id)
                 messagebox.showinfo("موفق", "دسته‌بندی ثبت شد.", parent=dlg)
                 dlg.destroy()
                 self.refresh_inventory()
@@ -632,9 +661,9 @@ class MainAppTk(tk.Tk):
         dlg.grab_set()
 
         cats = self.db.get_categories()
-        ttk.Label(dlg, text="دسته‌بندی:").pack(pady=2)
+        ttk.Label(dlg, text="دسته‌بندی/زیردسته:").pack(pady=2)
         cmb_cat = ttk.Combobox(dlg, justify="right")
-        cmb_cat['values'] = [f"{c['id']}: {c['name']}" for c in cats]
+        cmb_cat['values'] = [f"{c['id']}: {c['name']} " + (f"(زیردسته {c['parent_name']})" if c.get('parent_name') else "") for c in cats]
         if cats:
             cmb_cat.current(0)
         cmb_cat.pack(fill="x", padx=15)
@@ -676,13 +705,74 @@ class MainAppTk(tk.Tk):
 
         ttk.Button(dlg, text="💾 ذخیره قطعه", command=save).pack(pady=15)
 
+    def edit_part(self):
+        selected = self.tree_parts.selection()
+        if not selected:
+            messagebox.showwarning("هشدار", "لطفاً یک قطعه را انتخاب کنید.")
+            return
+        part_id = int(self.tree_parts.item(selected[0])["values"][0])
+        part = self.db.get_part(part_id)
+
+        dlg = tk.Toplevel(self)
+        dlg.title("ویرایش مشخصات قطعه")
+        dlg.geometry("400x380")
+        dlg.grab_set()
+
+        cats = self.db.get_categories()
+        ttk.Label(dlg, text="دسته‌بندی/زیردسته:").pack(pady=2)
+        cmb_cat = ttk.Combobox(dlg, justify="right")
+        cmb_cat['values'] = [f"{c['id']}: {c['name']}" for c in cats]
+        for idx, c in enumerate(cats):
+            if c["id"] == part.get("category_id"):
+                cmb_cat.current(idx)
+                break
+        cmb_cat.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="نام قطعه:").pack(pady=2)
+        ent_name = ttk.Entry(dlg, justify="right")
+        ent_name.insert(0, part["name"])
+        ent_name.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="موجودی:").pack(pady=2)
+        ent_qty = ttk.Entry(dlg, justify="right")
+        ent_qty.insert(0, str(part["quantity"]))
+        ent_qty.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="قیمت خرید (تومان):").pack(pady=2)
+        ent_buy = ttk.Entry(dlg, justify="right")
+        ent_buy.insert(0, str(int(part["buy_price"])))
+        ent_buy.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="قیمت فروش (تومان):").pack(pady=2)
+        ent_sell = ttk.Entry(dlg, justify="right")
+        ent_sell.insert(0, str(int(part["unit_price"])))
+        ent_sell.pack(fill="x", padx=15)
+
+        def save():
+            cat_id = int(cmb_cat.get().split(":")[0]) if cmb_cat.get() else None
+            self.db.update_part(part_id, {
+                "category_id": cat_id,
+                "name": ent_name.get().strip(),
+                "quantity": int(ent_qty.get() or 0),
+                "buy_price": float(ent_buy.get() or 0),
+                "unit_price": float(ent_sell.get() or 0)
+            })
+            messagebox.showinfo("موفق", "تغییرات قطعه ذخیره شد.", parent=dlg)
+            dlg.destroy()
+            self.refresh_inventory()
+
+        ttk.Button(dlg, text="💾 ذخیره تغییرات", command=save).pack(pady=15)
+
     # --- 4. حساب‌ها ---
     def setup_accounts_tab(self):
         top_bar = ttk.Frame(self.tab_accounts)
         top_bar.pack(fill="x", padx=10, pady=5)
 
-        btn_acc = ttk.Button(top_bar, text="➕ تعریف حساب مالی جدید", command=self.new_account)
+        btn_acc = ttk.Button(top_bar, text="➕ تعریف حساب جدید", command=self.new_account)
         btn_acc.pack(side="left", padx=5)
+
+        btn_edit_acc = ttk.Button(top_bar, text="✏️ ویرایش حساب", command=self.edit_account)
+        btn_edit_acc.pack(side="left", padx=5)
 
         self.tree_accounts = ttk.Treeview(self.tab_accounts, columns=("id", "title", "type", "bank", "num", "bal"), show="headings")
         for col, h in [("id", "شناسه"), ("title", "عنوان حساب"), ("type", "نوع"), ("bank", "بانک"), ("num", "شماره کارت/حساب"), ("bal", "موجودی (تومان)")]:
@@ -735,6 +825,55 @@ class MainAppTk(tk.Tk):
 
         ttk.Button(dlg, text="💾 ذخیره حساب", command=save).pack(pady=15)
 
+    def edit_account(self):
+        selected = self.tree_accounts.selection()
+        if not selected:
+            messagebox.showwarning("هشدار", "لطفاً یک حساب را انتخاب کنید.")
+            return
+        acc_id = int(self.tree_accounts.item(selected[0])["values"][0])
+        accs = self.db.get_accounts()
+        acc = next((a for a in accs if a["id"] == acc_id), None)
+        if not acc:
+            return
+
+        dlg = tk.Toplevel(self)
+        dlg.title("ویرایش حساب مالی")
+        dlg.geometry("380x300")
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="عنوان حساب:").pack(pady=2)
+        ent_title = ttk.Entry(dlg, justify="right")
+        ent_title.insert(0, acc["title"])
+        ent_title.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="نوع حساب:").pack(pady=2)
+        cmb_type = ttk.Combobox(dlg, values=ACCOUNT_TYPES, justify="right")
+        cmb_type.set(acc["account_type"])
+        cmb_type.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="نام بانک:").pack(pady=2)
+        ent_bank = ttk.Entry(dlg, justify="right")
+        ent_bank.insert(0, acc.get("bank_name") or "")
+        ent_bank.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="موجودی (تومان):").pack(pady=2)
+        ent_bal = ttk.Entry(dlg, justify="right")
+        ent_bal.insert(0, str(int(acc["current_balance"])))
+        ent_bal.pack(fill="x", padx=15)
+
+        def save():
+            self.db.update_account(acc_id, {
+                "title": ent_title.get().strip(),
+                "account_type": cmb_type.get(),
+                "bank_name": ent_bank.get().strip(),
+                "current_balance": float(ent_bal.get() or 0)
+            })
+            messagebox.showinfo("موفق", "حساب مالی به‌روزرسانی شد.", parent=dlg)
+            dlg.destroy()
+            self.refresh_accounts()
+
+        ttk.Button(dlg, text="💾 ذخیره تغییرات", command=save).pack(pady=15)
+
     # --- 5. همکاران ---
     def setup_colleagues_tab(self):
         top_bar = ttk.Frame(self.tab_colleagues)
@@ -742,6 +881,9 @@ class MainAppTk(tk.Tk):
 
         btn_coll = ttk.Button(top_bar, text="➕ تعریف همکار جدید", command=self.new_colleague)
         btn_coll.pack(side="left", padx=5)
+
+        btn_edit_coll = ttk.Button(top_bar, text="✏️ ویرایش همکار", command=self.edit_colleague)
+        btn_edit_coll.pack(side="left", padx=5)
 
         self.tree_colls = ttk.Treeview(self.tab_colleagues, columns=("id", "name", "mobile", "shop", "bal"), show="headings")
         for col, h in [("id", "شناسه"), ("name", "نام همکار"), ("mobile", "همراه"), ("shop", "فروشگاه/کارگاه"), ("bal", "مانده حساب (تومان)")]:
@@ -787,6 +929,50 @@ class MainAppTk(tk.Tk):
 
         ttk.Button(dlg, text="💾 ذخیره همکار", command=save).pack(pady=15)
 
+    def edit_colleague(self):
+        selected = self.tree_colls.selection()
+        if not selected:
+            messagebox.showwarning("هشدار", "لطفاً یک همکار را انتخاب کنید.")
+            return
+        cid = int(self.tree_colls.item(selected[0])["values"][0])
+        colls = self.db.get_colleagues()
+        c = next((item for item in colls if item["id"] == cid), None)
+        if not c:
+            return
+
+        dlg = tk.Toplevel(self)
+        dlg.title("ویرایش همکار")
+        dlg.geometry("380x280")
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="نام و نام خانوادگی:").pack(pady=2)
+        ent_name = ttk.Entry(dlg, justify="right")
+        ent_name.insert(0, c["full_name"])
+        ent_name.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="شماره همراه:").pack(pady=2)
+        ent_mob = ttk.Entry(dlg, justify="right")
+        ent_mob.insert(0, c.get("mobile") or "")
+        ent_mob.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="فروشگاه/کارگاه:").pack(pady=2)
+        ent_shop = ttk.Entry(dlg, justify="right")
+        ent_shop.insert(0, c.get("shop_name") or "")
+        ent_shop.pack(fill="x", padx=15)
+
+        def save():
+            self.db.update_colleague(cid, {
+                "full_name": ent_name.get().strip(),
+                "mobile": ent_mob.get().strip(),
+                "shop_name": ent_shop.get().strip(),
+                "current_balance": c.get("current_balance", 0)
+            })
+            messagebox.showinfo("موفق", "مشخصات همکار به‌روزرسانی شد.", parent=dlg)
+            dlg.destroy()
+            self.refresh_colleagues()
+
+        ttk.Button(dlg, text="💾 ذخیره تغییرات", command=save).pack(pady=15)
+
     # --- 6. تکنسین‌ها ---
     def setup_techs_tab(self):
         top_bar = ttk.Frame(self.tab_techs)
@@ -794,6 +980,9 @@ class MainAppTk(tk.Tk):
 
         btn_tech = ttk.Button(top_bar, text="➕ تعریف تکنسین جدید", command=self.new_technician)
         btn_tech.pack(side="left", padx=5)
+
+        btn_edit_tech = ttk.Button(top_bar, text="✏️ ویرایش تکنسین", command=self.edit_technician)
+        btn_edit_tech.pack(side="left", padx=5)
 
         self.tree_techs = ttk.Treeview(self.tab_techs, columns=("id", "name", "mobile", "spec", "comm"), show="headings")
         for col, h in [("id", "شناسه"), ("name", "نام تکنسین"), ("mobile", "همراه"), ("spec", "تخصص"), ("comm", "درصد پورسانت")]:
@@ -845,7 +1034,56 @@ class MainAppTk(tk.Tk):
 
         ttk.Button(dlg, text="💾 ذخیره تکنسین", command=save).pack(pady=15)
 
-    # --- 7. مشتریان ---
+    def edit_technician(self):
+        selected = self.tree_techs.selection()
+        if not selected:
+            messagebox.showwarning("هشدار", "لطفاً یک تکنسین را انتخاب کنید.")
+            return
+        tid = int(self.tree_techs.item(selected[0])["values"][0])
+        techs = self.db.get_technicians()
+        t = next((item for item in techs if item["id"] == tid), None)
+        if not t:
+            return
+
+        dlg = tk.Toplevel(self)
+        dlg.title("ویرایش مشخصات تکنسین")
+        dlg.geometry("380x300")
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="نام و نام خانوادگی:").pack(pady=2)
+        ent_name = ttk.Entry(dlg, justify="right")
+        ent_name.insert(0, t["full_name"])
+        ent_name.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="شماره همراه:").pack(pady=2)
+        ent_mob = ttk.Entry(dlg, justify="right")
+        ent_mob.insert(0, t.get("mobile") or "")
+        ent_mob.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="تخصص:").pack(pady=2)
+        ent_spec = ttk.Entry(dlg, justify="right")
+        ent_spec.insert(0, t.get("specialty") or "")
+        ent_spec.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="درصد پورسانت (٪):").pack(pady=2)
+        ent_comm = ttk.Entry(dlg, justify="right")
+        ent_comm.insert(0, str(t.get("commission_rate", 0)))
+        ent_comm.pack(fill="x", padx=15)
+
+        def save():
+            self.db.update_technician(tid, {
+                "full_name": ent_name.get().strip(),
+                "mobile": ent_mob.get().strip(),
+                "specialty": ent_spec.get().strip(),
+                "commission_rate": float(ent_comm.get() or 0)
+            })
+            messagebox.showinfo("موفق", "مشخصات تکنسین به روزرسانی شد.", parent=dlg)
+            dlg.destroy()
+            self.refresh_techs()
+
+        ttk.Button(dlg, text="💾 ذخیره تغییرات", command=save).pack(pady=15)
+
+    # --- 7. مشتریان همراه وضعیت، مانده بدهی/طلبکاری و سوابق ---
     def setup_custs_tab(self):
         top_bar = ttk.Frame(self.tab_custs)
         top_bar.pack(fill="x", padx=10, pady=5)
@@ -855,11 +1093,23 @@ class MainAppTk(tk.Tk):
         self.ent_cust_search.pack(side="right", padx=5)
         self.ent_cust_search.bind("<KeyRelease>", lambda e: self.refresh_custs())
 
+        ttk.Label(top_bar, text="فیلتر وضعیت:").pack(side="right", padx=5)
+        self.cmb_cust_filter = ttk.Combobox(top_bar, values=["همه"] + CUSTOMER_STATUSES, state="readonly", justify="right", width=12)
+        self.cmb_cust_filter.current(0)
+        self.cmb_cust_filter.pack(side="right", padx=5)
+        self.cmb_cust_filter.bind("<<ComboboxSelected>>", lambda e: self.refresh_custs())
+
         btn_cust = ttk.Button(top_bar, text="➕ تعریف مشتری جدید", command=self.new_customer)
         btn_cust.pack(side="left", padx=5)
 
-        self.tree_custs = ttk.Treeview(self.tab_custs, columns=("id", "name", "mobile", "phone", "addr"), show="headings")
-        for col, h in [("id", "شناسه"), ("name", "نام و نام خانوادگی"), ("mobile", "شماره همراه"), ("phone", "تلفن ثابت"), ("addr", "آدرس")]:
+        btn_edit_cust = ttk.Button(top_bar, text="✏️ ویرایش مشخصات", command=self.edit_customer)
+        btn_edit_cust.pack(side="left", padx=5)
+
+        btn_hist_cust = ttk.Button(top_bar, text="📄 مشاهده سوابق و پرداختی‌ها", command=self.view_customer_history)
+        btn_hist_cust.pack(side="left", padx=5)
+
+        self.tree_custs = ttk.Treeview(self.tab_custs, columns=("id", "name", "mobile", "status", "cost", "paid", "balance"), show="headings")
+        for col, h in [("id", "شناسه"), ("name", "نام و نام خانوادگی"), ("mobile", "شماره همراه"), ("status", "وضعیت حساب"), ("cost", "کل فاکتورها"), ("paid", "کل پرداختی"), ("balance", "مانده حساب (تومان)")]:
             self.tree_custs.heading(col, text=h)
         self.tree_custs.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -867,13 +1117,18 @@ class MainAppTk(tk.Tk):
         for row in self.tree_custs.get_children():
             self.tree_custs.delete(row)
         q = self.ent_cust_search.get().strip()
-        for c in self.db.get_customers(search=q):
-            self.tree_custs.insert("", "end", values=(c["id"], c.get("full_name"), c.get("mobile"), c.get("phone") or "-", c.get("address") or "-"))
+        f_stat = self.cmb_cust_filter.get()
+        filter_val = "" if f_stat == "همه" else f_stat
+
+        for c in self.db.get_customers(search=q, filter_status=filter_val):
+            bal = c.get("balance", 0)
+            bal_str = f"{money(abs(bal))} ({'بدهکار' if bal > 0 else 'طلبکار' if bal < 0 else 'تسویه'})"
+            self.tree_custs.insert("", "end", values=(c["id"], c.get("full_name"), c.get("mobile"), c.get("status", "عادی"), money(c.get("total_cost")), money(c.get("total_paid")), bal_str))
 
     def new_customer(self):
         dlg = tk.Toplevel(self)
         dlg.title("ثبت مشتری جدید")
-        dlg.geometry("380x320")
+        dlg.geometry("380x360")
         dlg.grab_set()
 
         ttk.Label(dlg, text="نام و نام خانوادگی:").pack(pady=2)
@@ -883,6 +1138,11 @@ class MainAppTk(tk.Tk):
         ttk.Label(dlg, text="شماره همراه:").pack(pady=2)
         ent_mob = ttk.Entry(dlg, justify="right")
         ent_mob.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="وضعیت مشتری:").pack(pady=2)
+        cmb_stat = ttk.Combobox(dlg, values=CUSTOMER_STATUSES, justify="right")
+        cmb_stat.set("عادی")
+        cmb_stat.pack(fill="x", padx=15)
 
         ttk.Label(dlg, text="کد ملی:").pack(pady=2)
         ent_nat = ttk.Entry(dlg, justify="right")
@@ -899,6 +1159,7 @@ class MainAppTk(tk.Tk):
             self.db.add_customer({
                 "full_name": ent_name.get().strip(),
                 "mobile": ent_mob.get().strip(),
+                "status": cmb_stat.get(),
                 "national_code": ent_nat.get().strip(),
                 "address": ent_addr.get().strip()
             })
@@ -907,6 +1168,88 @@ class MainAppTk(tk.Tk):
             self.refresh_custs()
 
         ttk.Button(dlg, text="💾 ذخیره مشتری", command=save).pack(pady=15)
+
+    def edit_customer(self):
+        selected = self.tree_custs.selection()
+        if not selected:
+            messagebox.showwarning("هشدار", "لطفاً یک مشتری را انتخاب کنید.")
+            return
+        cid = int(self.tree_custs.item(selected[0])["values"][0])
+        c = self.db.get_customer(cid)
+
+        dlg = tk.Toplevel(self)
+        dlg.title("ویرایش مشخصات مشتری")
+        dlg.geometry("380x360")
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="نام و نام خانوادگی:").pack(pady=2)
+        ent_name = ttk.Entry(dlg, justify="right")
+        ent_name.insert(0, c["full_name"])
+        ent_name.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="شماره همراه:").pack(pady=2)
+        ent_mob = ttk.Entry(dlg, justify="right")
+        ent_mob.insert(0, c.get("mobile") or "")
+        ent_mob.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="وضعیت حساب (خوش حساب/بد حساب/لیست سیاه):").pack(pady=2)
+        cmb_stat = ttk.Combobox(dlg, values=CUSTOMER_STATUSES, justify="right")
+        cmb_stat.set(c.get("status", "عادی"))
+        cmb_stat.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="کد ملی:").pack(pady=2)
+        ent_nat = ttk.Entry(dlg, justify="right")
+        ent_nat.insert(0, c.get("national_code") or "")
+        ent_nat.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="آدرس:").pack(pady=2)
+        ent_addr = ttk.Entry(dlg, justify="right")
+        ent_addr.insert(0, c.get("address") or "")
+        ent_addr.pack(fill="x", padx=15)
+
+        def save():
+            self.db.update_customer(cid, {
+                "full_name": ent_name.get().strip(),
+                "mobile": ent_mob.get().strip(),
+                "status": cmb_stat.get(),
+                "national_code": ent_nat.get().strip(),
+                "address": ent_addr.get().strip()
+            })
+            messagebox.showinfo("موفق", "مشخصات مشتری به روزرسانی شد.", parent=dlg)
+            dlg.destroy()
+            self.refresh_custs()
+
+        ttk.Button(dlg, text="💾 ذخیره تغییرات", command=save).pack(pady=15)
+
+    def view_customer_history(self):
+        selected = self.tree_custs.selection()
+        if not selected:
+            messagebox.showwarning("هشدار", "لطفاً یک مشتری را انتخاب کنید.")
+            return
+        cid = int(self.tree_custs.item(selected[0])["values"][0])
+        history = self.db.get_customer_payments_and_receipts(cid)
+        cust = self.db.get_customer(cid)
+
+        dlg = tk.Toplevel(self)
+        dlg.title(f"سوابق و پرداختی‌های مشتری: {cust['full_name']}")
+        dlg.geometry("700x450")
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="📜 لیست فاکتورها و قبض‌های تعمیر:", font=("Tahoma", 10, "bold")).pack(anchor="e", padx=10, pady=5)
+        tree_rep = ttk.Treeview(dlg, columns=("rec", "device", "cost", "paid", "date"), show="headings", height=5)
+        for col, h in [("rec", "شماره قبض"), ("device", "دستگاه"), ("cost", "مبلغ کل"), ("paid", "پرداختی"), ("date", "تاریخ")]:
+            tree_rep.heading(col, text=h)
+        tree_rep.pack(fill="x", padx=10, pady=2)
+        for r in history["repairs"]:
+            tree_rep.insert("", "end", values=(r["receipt_no"], r["device_type"], money(r["final_cost"]), money(r["paid"]), iso_to_jalali(r["created_at"])))
+
+        ttk.Label(dlg, text="💳 سوابق تراکنش‌ها و پرداختی‌ها:", font=("Tahoma", 10, "bold")).pack(anchor="e", padx=10, pady=5)
+        tree_pay = ttk.Treeview(dlg, columns=("amount", "method", "ref", "date"), show="headings", height=5)
+        for col, h in [("amount", "مبلغ پرداختی"), ("method", "روش"), ("ref", "پیگیری/مرجع"), ("date", "تاریخ واریز")]:
+            tree_pay.heading(col, text=h)
+        tree_pay.pack(fill="x", padx=10, pady=2)
+        for p in history["payments"]:
+            tree_pay.insert("", "end", values=(money(p["amount"]), p["payment_method"], p.get("reference_no") or "-", iso_to_jalali(p["payment_date"])))
 
     # --- 8. حسابداری ---
     def setup_accounting_tab(self):
@@ -930,7 +1273,7 @@ class MainAppTk(tk.Tk):
     def new_expense(self):
         dlg = tk.Toplevel(self)
         dlg.title("ثبت هزینه کارگاه")
-        dlg.geometry("400x320")
+        dlg.geometry("400x360")
         dlg.grab_set()
 
         ttk.Label(dlg, text="دسته هزینه:").pack(pady=2)
@@ -941,6 +1284,11 @@ class MainAppTk(tk.Tk):
         ttk.Label(dlg, text="عنوان هزینه:").pack(pady=2)
         ent_title = ttk.Entry(dlg, justify="right")
         ent_title.pack(fill="x", padx=15)
+
+        ttk.Label(dlg, text="تاریخ ثبت هزینه:").pack(pady=2)
+        ent_date = ttk.Entry(dlg, justify="right")
+        ent_date.insert(0, jalali_today())
+        ent_date.pack(fill="x", padx=15)
 
         accounts = self.db.get_accounts()
         ttk.Label(dlg, text="پرداخت از حساب:").pack(pady=2)
@@ -963,7 +1311,8 @@ class MainAppTk(tk.Tk):
                 "category": cmb_cat.get(),
                 "title": ent_title.get().strip(),
                 "account_id": acc_id,
-                "amount": float(ent_amt.get())
+                "amount": float(ent_amt.get()),
+                "expense_date": ent_date.get().strip()
             })
             messagebox.showinfo("موفق", "هزینه ثبت شد.", parent=dlg)
             dlg.destroy()
